@@ -5,10 +5,14 @@ import argparse
 import logging
 import socket
 import time
+import subprocess
+import select
 
 DEFAULT_KNOCK_SEQUENCE = [1234, 5678, 9012]
 DEFAULT_PROTECTED_PORT = 2222
 DEFAULT_SEQUENCE_WINDOW = 10.0
+
+LISTEN_HOST = "0.0.0.0"
 
 
 def setup_logging():
@@ -18,33 +22,88 @@ def setup_logging():
         handlers=[logging.StreamHandler()],
     )
 
-
+# remove firewall rule to open port
 def open_protected_port(protected_port):
-    """Open the protected port using firewall rules."""
-    # TODO: Use iptables/nftables to allow access to protected_port.
-    logging.info("TODO: Open firewall for port %s", protected_port)
+    subprocess.run(
+        [
+            "iptables",
+            "-D",
+            "INPUT",
+            "-p",
+            "tcp",
+            "--dport",
+            str(protected_port),
+            "-j",
+            "DROP",
+        ],
+        check=False,
+    )
+    logging.info("Opened firewall for port %s", protected_port)
 
 
 def close_protected_port(protected_port):
-    """Close the protected port using firewall rules."""
-    # TODO: Remove firewall rules for protected_port.
-    logging.info("TODO: Close firewall for port %s", protected_port)
+# add firewall rule here
+    subprocess.run(
+        [
+            "iptables",
+            "-A",
+            "INPUT",
+            "-p",
+            "tcp",
+            "--dport",
+            str(protected_port),
+            "-j",
+            "DROP",
+        ],
+        check=False,
+    )
+    logging.info("Closed firewall for port %s", protected_port)
 
 
 def listen_for_knocks(sequence, window_seconds, protected_port):
-    """Listen for knock sequence and open the protected port."""
     logger = logging.getLogger("KnockServer")
     logger.info("Listening for knocks: %s", sequence)
     logger.info("Protected port: %s", protected_port)
 
-    # TODO: Create UDP or TCP listeners for each knock port.
-    # TODO: Track each source IP and its progress through the sequence.
-    # TODO: Enforce timing window per sequence.
-    # TODO: On correct sequence, call open_protected_port().
-    # TODO: On incorrect sequence, reset progress.
+    sockets = {}
+    for port in sequence:
+        #using UDP socket to get knock
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.bind((LISTEN_HOST, port))
+        s.setblocking(False)
+        sockets[port] = s
+
+    # for tracking the IP address
+    clients = {}
 
     while True:
-        time.sleep(1)
+        readable, _, _ = select.select(sockets.values(), [], [], 1.0)
+        now = time.time()
+
+        for s in readable:
+            data, addr = s.recvfrom(1024)
+            ip = addr[0]
+            port = s.getsockname()[1]
+
+            if ip not in clients:
+                if port == sequence[0]:
+                    clients[ip] = {"index": 1, "start": now}
+                continue
+
+            state = clients[ip]
+
+            # make sure time 
+            if now - state["start"] > window_seconds:
+                del clients[ip]
+                continue
+            # sequence 
+            if port == sequence[state["index"]]:
+                state["index"] += 1
+                if state["index"] == len(sequence):
+                    open_protected_port(protected_port)
+                    del clients[ip]
+            else:
+                del clients[ip]
 
 
 def parse_args():

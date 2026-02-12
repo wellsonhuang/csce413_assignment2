@@ -79,11 +79,13 @@ def fake_shell(channel, client_ip, server):
                 f"user={server.username} cmd=\"{command}\""
             )
 
+            # protected some attack patterns I set
             ATTACK_PATTERNS = [
                 "wget ",
                 "curl ",
                 "/etc/shadow",
             ]
+            # if the pattern is in the set I set, send alert
             for pattern in ATTACK_PATTERNS:
                 if pattern in command:
                     logger.warning(
@@ -116,6 +118,7 @@ def fake_shell(channel, client_ip, server):
 
 
 def handle_client(client, addr):
+    # timeout for connection
     transport = paramiko.Transport(client)
     transport.local_version = BANNER
     transport.add_server_key(HOST_KEY)
@@ -130,6 +133,7 @@ def handle_client(client, addr):
             return
 
         server.event.wait(10)
+        # I will cloess the channel if lower than 10 sec
         fake_shell(channel, addr[0], server)
 
     except Exception as e:
@@ -146,6 +150,7 @@ def start_honeypot(host="0.0.0.0", port=22):
 
     logger.info(f"SSH honeypot listening on {host}:{port}")
 
+    # new thread for connection
     while True:
         client, addr = sock.accept()
         logger.info(f"CONNECTION from {addr[0]}:{addr[1]}")

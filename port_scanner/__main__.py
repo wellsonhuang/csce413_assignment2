@@ -1,74 +1,82 @@
 #!/usr/bin/env python3
 """
-Enhanced Port Scanner
+
 Assignment 2: Network Security
 """
 
 import socket
-import sys
+import argparse
 import ipaddress
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # In order to grab banner
-def grab_banner(target, port, timeout=1.0):
+def grab_banner(target, port, timeout=2):
+    # connect to the port
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(timeout)
         sock.connect((target, port))
 
+        # situation 1 : listen to the port
         try:
-            # first try http, send a simple http request to get a banner
-            sock.sendall(b"HEAD / HTTP/1.1\r\nHost: localhost\r\n\r\n")
             data = sock.recv(1024)
             if data:
                 return data.decode(errors="ignore").strip()
-        except Exception:
+        except:
+            pass
+
+        # situation 2 : if their is no return ,send HTTP request
+        try:
+            request = b"HEAD / HTTP/1.1\r\nHost: localhost\r\n\r\n"
+            sock.sendall(request)
+            data = sock.recv(1024)
+            if data:
+                return data.decode(errors="ignore").strip()
+        except:
             pass
 
         return ""
 
-    except Exception:
+    except:
         return ""
     finally:
+        try:
+            sock.close()
+        except:
+            pass
+
+
+def scan_port(target, port, timeout=0.1):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+
+    start_time = time.time()
+    result = sock.connect_ex((target, port))
+    elapsed = time.time() - start_time
+
+    # if connection successful, go grab banner
+    if result == 0:
+        banner = grab_banner(target, port, timeout)
         sock.close()
+        return {
+            "port": port,
+            "state": "OPEN",
+            "time": elapsed,
+            "banner": banner
+        }
 
-
-def scan_port(target, port, timeout=1.0):
-    try:
-        # Create a socket and set timeout
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
-
-        start = time.time()
-        # to see if the target port is open
-        result = sock.connect_ex((target, port))
-        elapsed = time.time() - start
-
-        if result == 0:
-            banner = grab_banner(target, port, timeout)
-            return {
-                "port": port,
-                "state": "OPEN",
-                "time": elapsed,
-                "banner": banner
-            }
-
-    except Exception:
-        pass
-    finally:
-        sock.close()
-
+    sock.close()
     return None
 
 
-def scan_range(target, start_port, end_port, threads=50):
+def scan_range(target, start_port, end_port, threads):
     results = []
 
-    print(f"[*] Scanning {target} from port {start_port} to {end_port}")
-    print(f"[*] This may take a while...\n")
+    print(f"\n[*] Start Scanning on {target} ({start_port}-{end_port})")
+    print(f"[*] you are using threads: {threads}\n")
 
-    # using the thread here to speed up
+    # Use thread to go faster
     with ThreadPoolExecutor(max_workers=threads) as executor:
         futures = [
             executor.submit(scan_port, target, port)
@@ -82,45 +90,49 @@ def scan_range(target, start_port, end_port, threads=50):
 
     return sorted(results, key=lambda x: x["port"])
 
-
+# to handle CIDR
 def expand_targets(target):
     try:
         if "/" in target:
-            net = ipaddress.ip_network(target, strict=False)
-            return [str(ip) for ip in net.hosts()]
+            network = ipaddress.ip_network(target, strict=False)
+            return [str(ip) for ip in network.hosts()]
         else:
             return [target]
     except ValueError:
-        print("[!] Invalid target")
-        sys.exit(1)
+        print("[!] there is no target")
+        exit(1)
+
+
+def parse_ports(port_string):
+    try:
+        start, end = port_string.split("-")
+        return int(start), int(end)
+    except:
+        print("[!] Invalid port range format. Use format like 1-65535")
+        exit(1)
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Simple TCP Port Scanner")
 
+    parser.add_argument("--target", required=True)
+    parser.add_argument("--ports", default="1-1024")
+    parser.add_argument("--threads", type=int, default=100)
 
-    if len(sys.argv) < 2:
-        print("Usage: python3 port_scanner/__main__.py <target> [start_port] [end_port]")
-        print("Example: python3 port_scanner/__main__.py localhost 1 65535")
-        sys.exit(1)
+    args = parser.parse_args()
 
-    target_input = sys.argv[1]
-
-    start_port = int(sys.argv[2]) if len(sys.argv) > 2 else 1
-    end_port = int(sys.argv[3]) if len(sys.argv) > 3 else 1024
-
-    targets = expand_targets(target_input)
+    start_port, end_port = parse_ports(args.ports)
+    targets = expand_targets(args.target)
 
     for target in targets:
-        print(f"[*] Starting port scan on {target}")
-
-        results = scan_range(target, start_port, end_port)
+        results = scan_range(target, start_port, end_port, args.threads)
 
         print("PORT\tSTATE\tTIME\tSERVICE / BANNER")
-        print("-" * 30)
+        print("-" * 60)
 
         for r in results:
-            service = r["banner"].splitlines()[0] if r["banner"] else "-"
-            print(f"{r['port']}\t{r['state']}\t{r['time']:.3f}s\t{service}")
+            banner_line = r["banner"].splitlines()[0] if r["banner"] else "-"
+            print(f"{r['port']}\t{r['state']}\t{r['time']:.3f}s\t{banner_line}")
 
         print(f"\n[+] Found {len(results)} open ports\n")
 
